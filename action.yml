@@ -1,0 +1,87 @@
+name: Unreal Agent PR Review
+description: Review pull requests with Unreal Agent in a nono sandbox and post the review as a PR comment.
+author: ianchov
+branding:
+  icon: eye
+  color: purple
+
+inputs:
+  anthropic-api-key:
+    description: Anthropic API key. It stays in the nono proxy and never enters the sandbox.
+    required: true
+  model:
+    description: Anthropic model for the agent and the reviewer check.
+    default: claude-sonnet-5-5
+  max-review-rounds:
+    description: Most agent and reviewer-check rounds per run.
+    default: "3"
+  review-timeout-minutes:
+    description: Time limit for all review rounds. The runner has no timeout for each model request.
+    default: "40"
+
+outputs:
+  status:
+    description: Reviewer-check result, for example "Passed the reviewer check.". Empty when the PR was skipped.
+    value: ${{ steps.review.outputs.status }}
+  skipped:
+    description: "\"true\" when the PR was skipped: draft, fork, or Dependabot."
+    value: ${{ steps.gate.outputs.skipped }}
+
+runs:
+  using: composite
+  steps:
+    - id: gate
+      shell: bash
+      env:
+        PR_DRAFT: ${{ github.event.pull_request.draft }}
+        HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
+        MAX_REVIEW_ROUNDS: ${{ inputs.max-review-rounds }}
+        REVIEW_TIMEOUT_MINUTES: ${{ inputs.review-timeout-minutes }}
+      run: bash "$GITHUB_ACTION_PATH/scripts/gate.sh"
+    - if: steps.gate.outputs.skipped == 'false'
+      uses: actions/checkout@v7
+      with:
+        ref: ${{ github.event.pull_request.head.sha }}
+        fetch-depth: 0
+        persist-credentials: false
+    - if: steps.gate.outputs.skipped == 'false'
+      shell: bash
+      run: bash "$GITHUB_ACTION_PATH/scripts/install.sh"
+    - if: steps.gate.outputs.skipped == 'false'
+      shell: bash
+      env:
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        PR_TITLE: ${{ github.event.pull_request.title }}
+        PR_BODY: ${{ github.event.pull_request.body }}
+        BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      run: bash "$GITHUB_ACTION_PATH/scripts/prepare.sh"
+    - id: review
+      if: steps.gate.outputs.skipped == 'false'
+      shell: bash
+      env:
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
+        UNREAL_HARNESS_LLM_PROVIDER: anthropic
+        UNREAL_HARNESS_LLM_MODEL: ${{ inputs.model }}
+        MAX_REVIEW_ROUNDS: ${{ inputs.max-review-rounds }}
+        REVIEW_TIMEOUT_MINUTES: ${{ inputs.review-timeout-minutes }}
+      run: timeout "${REVIEW_TIMEOUT_MINUTES}m" bash "$GITHUB_ACTION_PATH/scripts/review.sh"
+    - if: steps.gate.outputs.skipped == 'false'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        MODEL: ${{ inputs.model }}
+      run: bash "$GITHUB_ACTION_PATH/scripts/comment.sh"
+    - if: always() && steps.gate.outputs.skipped == 'false'
+      uses: actions/upload-artifact@v7
+      with:
+        name: unreal-agent-review-${{ github.event.pull_request.number }}
+        path: |
+          ${{ runner.temp }}/unreal-agent/*.jsonl
+          ${{ runner.temp }}/unreal-agent/review.md
+        if-no-files-found: ignore
+        overwrite: true
