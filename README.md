@@ -5,6 +5,8 @@ A GitHub Action that reviews pull requests with
 The agent runs inside a [nono](https://github.com/nolabs-ai/nono) sandbox. It cannot change files,
 reach the network, or read the API key.
 
+Listed on [GitHub Marketplace](https://github.com/marketplace/actions/unreal-agent-pr-review).
+
 For a ready-made workflow, use the reusable workflow or the template in
 [ianchov/unreal-agent-pr-review](https://github.com/ianchov/unreal-agent-pr-review).
 
