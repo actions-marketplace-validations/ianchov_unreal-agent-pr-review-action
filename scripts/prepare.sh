@@ -43,8 +43,10 @@ from_base() { # repository path, fallback file, destination
     cp "$2" "$3"
   fi
 }
-from_base .github/unreal-agent/pr-review.md "$defaults/pr-review.md" "$trusted/pr-review.md"
-from_base .github/unreal-agent/review-criteria.md "$defaults/review-criteria.md" "$trusted/review-criteria.md"
+# PROMPT_DIR (from gate.sh) is empty for the standard review and "adversarial/" for the adversarial
+# one, so each mode reads its own prompt and criteria. Both modes use the same AGENTS.md.
+from_base ".github/unreal-agent/${PROMPT_DIR}pr-review.md" "$defaults/${PROMPT_DIR}pr-review.md" "$trusted/pr-review.md"
+from_base ".github/unreal-agent/${PROMPT_DIR}review-criteria.md" "$defaults/${PROMPT_DIR}review-criteria.md" "$trusted/review-criteria.md"
 from_base AGENTS.md "$defaults/AGENTS.md" "$inputs/AGENTS.md"
 
 # The PR title and description are author-written. They go to read-only files, not into
@@ -69,8 +71,8 @@ EOF
 cat > "$trusted/reviewer-system.md" <<'EOF'
 You check a code review against acceptance criteria. You have no tools and cannot read files.
 Judge the review only from its text against the criteria. Do not try to verify the code.
-Reply with `VERDICT: ACCEPT` or `VERDICT: RETRY` on the first line and nothing before it.
-After `VERDICT: RETRY`, list each failed criterion and the change the review needs.
+Check each criterion first. List each failed criterion and the change the review needs, or write that every criterion holds.
+End with `VERDICT: ACCEPT` or `VERDICT: RETRY` on the last line and nothing after it.
 EOF
 
 # Bash runs inside this sandbox too. The real ANTHROPIC_API_KEY stays in the nono proxy:
