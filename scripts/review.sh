@@ -12,12 +12,13 @@ trusted="$RUNNER_TEMP/unreal-agent"
 bin="$RUNNER_TEMP/unreal-agent-bin"
 cd "$work"
 
-# nono sets ANTHROPIC_BASE_URL to its proxy inside the sandbox, so it must expand there.
+# nono sets LLM_BASE_URL (from the "llm" credential in prepare.sh) to its proxy inside the sandbox,
+# so it must expand there.
 # shellcheck disable=SC2016
 run_agent() { # request.json events.jsonl
   nono run --silent --profile "$trusted/nono-profile.json" \
     --read "$bin" --read "$work" --read "$GITHUB_WORKSPACE" --read "$inputs" --allow "$state" \
-    -- sh -c 'UNREAL_HARNESS_LLM_BASE_URL="$ANTHROPIC_BASE_URL" exec "$1" -workspace "$2" -session-directory "$3"' \
+    -- sh -c 'UNREAL_HARNESS_LLM_BASE_URL="$LLM_BASE_URL" exec "$1" -workspace "$2" -session-directory "$3"' \
     sh "$bin/unreal-agent-runner" "$work" "$state" < "$1" \
     | tee "$2" \
     | jq -r --unbuffered '
@@ -59,9 +60,9 @@ for round in $(seq 1 "$MAX_REVIEW_ROUNDS"); do
   echo "::endgroup::"
   final_answer "$trusted/reviewer-$round.jsonl" > "$trusted/verdict.md" || true
   # The verdict is the last non-empty line, so the reviewer decides after it has checked every criterion.
-  case "$(awk 'NF { line = $0 } END { print line }' "$trusted/verdict.md" | tr -d '*` \r')" in
-    VERDICT:ACCEPT) status="Passed the reviewer check."; break ;;
-    VERDICT:RETRY) status="Did not pass the reviewer check within ${MAX_REVIEW_ROUNDS} rounds." ;;
+  case "$(python3 "$GITHUB_ACTION_PATH/scripts/unreal_review.py" reviewer-verdict "$trusted/verdict.md")" in
+    ACCEPT) status="Passed the reviewer check."; break ;;
+    RETRY) status="Did not pass the reviewer check within ${MAX_REVIEW_ROUNDS} rounds." ;;
     *) status="Not verified: the reviewer check did not return a verdict."; break ;;
   esac
   jq -n --arg session "$session" --rawfile system "$trusted/agent-system.md" --rawfile feedback "$trusted/verdict.md" \
@@ -70,11 +71,18 @@ for round in $(seq 1 "$MAX_REVIEW_ROUNDS"); do
 done
 [ "$status" = "Passed the reviewer check." ] || echo "::warning::$status"
 echo "$status" > "$trusted/review-status.txt"
-echo "status=$status" >> "$GITHUB_OUTPUT"
+# The verdict line under "## Verdict" and the most severe finding tag, for callers that run a second
+# review only after this one, for example the adversarial review only without P0 or P1 findings.
+{
+  echo "status=$status"
+  echo "verdict=$(python3 "$GITHUB_ACTION_PATH/scripts/unreal_review.py" verdict "$trusted/review.md")"
+  echo "highest-severity=$(python3 "$GITHUB_ACTION_PATH/scripts/unreal_review.py" severity "$trusted/review.md")"
+} >> "$GITHUB_OUTPUT"
 
-# Token totals over every agent and reviewer call; input includes cache reads and writes.
-cat "$trusted"/*.jsonl | jq -Rnr '[inputs | fromjson? | select(.Kind == "model_response") | .Data.Response.Usage]
-  | "Tokens: \(length) model calls, \(map(.InputTokens) | add // 0) input (\(map(.CachedInputTokens) | add // 0) cache read, \(map(.CacheWriteInputTokens) | add // 0) cache write), \(map(.OutputTokens) | add // 0) output."' > "$trusted/usage.txt"
+# Token totals over every agent and reviewer call, and their cost when every call can be priced:
+# OpenRouter reports it, and Anthropic is estimated from anthropic-prices.json.
+python3 "$GITHUB_ACTION_PATH/scripts/unreal_review.py" usage \
+  "$UNREAL_HARNESS_LLM_MODEL" "$trusted"/*.jsonl > "$trusted/usage.txt"
 cat "$trusted/usage.txt"
 echo "::group::Final review"
 cat "$trusted/review.md"
